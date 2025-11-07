@@ -12,7 +12,14 @@ const CHARTS_TO_PULL = [
     panelId: 27, 
     chartTitle: 'API Overall Volume',
     dashboardPath: 'api-health-overall-view'
+  },
+  { 
+    dashboardUid: 'LUq13bv4z', 
+    panelId: 60, 
+    chartTitle: 'API Concurrency Usage',
+    dashboardPath: 'api-health-overall-view'
   }
+  // Add more charts as needed
 ];
 
 // --- ADD-ON LIFECYCLE FUNCTIONS ---
@@ -38,31 +45,45 @@ function showSidebar() {
 
 /**
  * Generates the report using Google Drive as intermediary
+ * FIXED: Uses insertSlide with explicit index for precise ordering
  */
 function generateReportFromSidebar(inputs) {
   try {
     const presentation = SlidesApp.getActivePresentation();
     
-    // Clear existing slides (except the first one)
+    // Get all slides
     const slides = presentation.getSlides();
+    
+    // Clear ALL existing slides except the template (first one)
     for (let i = slides.length - 1; i >= 1; i--) {
       slides[i].remove();
     }
 
     const templateSlide = slides[0];
-
+    
+    // Process each chart
     CHARTS_TO_PULL.forEach((chartConfig, index) => {
-      let currentSlide;
+      Logger.log('');
+      Logger.log('=== Processing Chart ' + (index + 1) + ' ===');
+      Logger.log('Panel ID: ' + chartConfig.panelId);
+      Logger.log('Title: ' + chartConfig.chartTitle);
       
-      if (index === 0) {
-        currentSlide = templateSlide;
-      } else {
-        currentSlide = templateSlide.duplicate();
-      }
+      // Insert a new slide at the END (after all existing slides)
+      // This ensures order is preserved
+      const currentSlide = presentation.appendSlide(templateSlide);
+      Logger.log('Appended new slide at end of presentation');
       
+      // Build the image URL with user inputs
       const imageUrl = buildGrafanaRenderUrl(chartConfig, inputs);
+      
+      // Populate this slide
       populateSlideViaGoogleDrive(currentSlide, chartConfig.chartTitle, imageUrl);
     });
+    
+    // Remove the template at the very end
+    Logger.log('');
+    Logger.log('Removing template slide...');
+    templateSlide.remove();
 
     return 'Report generated successfully!';
 
@@ -105,16 +126,27 @@ function buildGrafanaRenderUrl(chartConfig, inputs) {
   
   const baseUrl = `${GRAFANA_URL}/render/d-solo/${chartConfig.dashboardUid}/${chartConfig.dashboardPath}`;
   
-  // Use MINIMAL parameters to avoid timeout
+  // Build parameters using ALL user inputs from sidebar
   const params = {
     'orgId': '1',
     'panelId': chartConfig.panelId,
-    'from': timeFrameMap[inputs.timeframe] || 'now-7d',  // Default to 24 hours
+    'from': timeFrameMap[inputs.timeframe] || 'now-24h',
     'to': 'now',
-    'var-tenant_id': inputs.tenantId || '',
+    'var-data_source': dataSourceMap[inputs.data_source] || 'Pinot Telemetry (US-Prod)',  // FROM SIDEBAR
+    'var-environment': environmentMap[inputs.environment] || 'prod02',  // FROM SIDEBAR
+    'var-tenant_id': inputs.tenantId || '',  // FROM SIDEBAR
+    'var-entity_id': '11e64eef-ad7b-6780-9658-00259058c29c',  // Hardcoded (may need to be dynamic)
+    'var-API': 'All',  // Hardcoded
+    'var-ZuoraResponseCode': 'All',  // Hardcoded
+    'var-HttpStatus': 'All',  // Hardcoded
+    'var-Client_twosinglequote': 'All',  // Hardcoded
+    'var-Client_query_string': '',  // Hardcoded
+    'var-GFW_Bucket': 'All',  // Hardcoded
+    'var-interval': intervalMap[inputs.interval] || 'day',  // FROM SIDEBAR
+    'var-gfw_time_range_from': '1.761966092427e+12',  // Hardcoded
+    'var-restapi_entity_id_mapping_table': 'restapi_entity_id_mapping',  // Hardcoded
     'width': '1000',
     'height': '500',
-    'var-interval': 'day',
     'tz': 'UTC'
   };
   
@@ -135,50 +167,95 @@ function buildGrafanaRenderUrl(chartConfig, inputs) {
  */
 function populateSlideViaGoogleDrive(slide, title, imageUrl) {
   try {
-    Logger.log('Starting populateSlideViaGoogleDrive...');
+    Logger.log('========================================');
+    Logger.log('Starting populateSlideViaGoogleDrive for: ' + title);
+    Logger.log('URL: ' + imageUrl);
     
     // Replace title placeholder
     slide.replaceAllText('{{CHART_TITLE}}', title);
+    Logger.log('Replaced chart title with: ' + title);
     
-    // Find placeholder
+    // Find placeholder - TRY MULTIPLE METHODS
     const shapes = slide.getShapes();
     let placeholder = null;
+    let left = 50;   // Default position
+    let top = 100;
+    let width = 600;  // Default size
+    let height = 400;
     
+    Logger.log('Total shapes found: ' + shapes.length);
+    
+    // Method 1: Try to find by Alt Text Title
     for (let i = 0; i < shapes.length; i++) {
       const shape = shapes[i];
-      if (shape.getTitle && shape.getTitle() === 'ImagePlaceholder') {
-        placeholder = shape;
-        break;
+      try {
+        const shapeTitle = shape.getTitle();
+        if (shapeTitle === 'ImagePlaceholder') {
+          placeholder = shape;
+          Logger.log('✅ Found placeholder by title at index ' + i);
+          break;
+        }
+      } catch (e) {
+        // Some shapes may not support getTitle()
       }
     }
     
+    // Method 2: If not found by title, find the largest rectangle
     if (!placeholder) {
+      Logger.log('Placeholder not found by title, searching for largest rectangle...');
+      
       let maxArea = 0;
       for (let i = 0; i < shapes.length; i++) {
         const shape = shapes[i];
-        if (shape.getShapeType() === SlidesApp.ShapeType.RECTANGLE) {
-          const area = shape.getWidth() * shape.getHeight();
-          if (area > maxArea) {
-            maxArea = area;
-            placeholder = shape;
+        try {
+          if (shape.getShapeType() === SlidesApp.ShapeType.RECTANGLE) {
+            const w = shape.getWidth();
+            const h = shape.getHeight();
+            const area = w * h;
+            
+            Logger.log('Rectangle ' + i + ': ' + w + 'x' + h + ' = ' + area);
+            
+            if (area > maxArea) {
+              maxArea = area;
+              placeholder = shape;
+            }
           }
+        } catch (e) {
+          Logger.log('Could not get dimensions for shape ' + i);
         }
+      }
+      
+      if (placeholder) {
+        Logger.log('✅ Found placeholder as largest rectangle (area: ' + maxArea + ')');
       }
     }
 
-    if (!placeholder) {
-      throw new Error('Could not find placeholder shape');
+    // If placeholder found, get its dimensions and remove it
+    if (placeholder) {
+      try {
+        left = placeholder.getLeft();
+        top = placeholder.getTop();
+        width = placeholder.getWidth();
+        height = placeholder.getHeight();
+        
+        Logger.log('Placeholder position: (' + left + ', ' + top + ')');
+        Logger.log('Placeholder size: ' + width + ' x ' + height);
+        
+        placeholder.remove();
+        Logger.log('Placeholder removed');
+      } catch (e) {
+        Logger.log('⚠️ Could not remove placeholder: ' + e.message);
+        Logger.log('Will insert at default position instead');
+      }
+    } else {
+      Logger.log('⚠️ No placeholder found - will insert at default position');
+      Logger.log('Default position: (' + left + ', ' + top + ')');
+      Logger.log('Default size: ' + width + ' x ' + height);
     }
 
-    const left = placeholder.getLeft();
-    const top = placeholder.getTop();
-    const width = placeholder.getWidth();
-    const height = placeholder.getHeight();
-    
-    Logger.log('Placeholder found: ' + left + ',' + top + ' / ' + width + 'x' + height);
-
-    // STEP 1: Fetch image from Grafana with longer timeout tolerance
-    Logger.log('Fetching from Grafana... (this may take up to 60 seconds)');
+    // STEP 1: Fetch image from Grafana
+    Logger.log('');
+    Logger.log('Fetching from Grafana...');
     
     const options = {
       'method': 'get',
@@ -190,13 +267,17 @@ function populateSlideViaGoogleDrive(slide, title, imageUrl) {
       options.headers = {
         'Authorization': 'Bearer ' + GRAFANA_API_KEY
       };
+      Logger.log('Using API key authentication');
     }
     
     let response;
     try {
+      const startTime = new Date().getTime();
       response = UrlFetchApp.fetch(imageUrl, options);
+      const duration = new Date().getTime() - startTime;
+      Logger.log('Fetch completed in ' + (duration/1000).toFixed(1) + ' seconds');
     } catch (fetchError) {
-      Logger.log('Fetch error: ' + fetchError.message);
+      Logger.log('❌ Fetch error: ' + fetchError.message);
       throw new Error('Failed to fetch from Grafana: ' + fetchError.message);
     }
     
@@ -204,7 +285,7 @@ function populateSlideViaGoogleDrive(slide, title, imageUrl) {
     Logger.log('Response code: ' + responseCode);
     
     if (responseCode === 504) {
-      throw new Error('Grafana timeout (504). Try: 1) Shorter time range, 2) Simpler panel, 3) Contact Grafana admin');
+      throw new Error('Grafana timeout (504). Try: 1) Shorter time range, 2) Contact Grafana admin');
     }
     
     if (responseCode !== 200) {
@@ -219,10 +300,13 @@ function populateSlideViaGoogleDrive(slide, title, imageUrl) {
     Logger.log('Content-Type: ' + contentType);
     
     if (contentType === 'text/html') {
-      throw new Error('Grafana returned HTML instead of image. Check dashboard variables.');
+      const htmlSnippet = blob.getDataAsString().substring(0, 200);
+      Logger.log('HTML content: ' + htmlSnippet);
+      throw new Error('Grafana returned HTML instead of image. Check panel ID and parameters.');
     }
     
     // STEP 2: Save to Google Drive temporarily
+    Logger.log('');
     Logger.log('Saving to Google Drive...');
     
     const fileName = 'grafana_temp_' + Date.now() + '.png';
@@ -233,15 +317,12 @@ function populateSlideViaGoogleDrive(slide, title, imageUrl) {
       tempFile = DriveApp.createFile(blob);
       Logger.log('Created Drive file: ' + tempFile.getId());
     } catch (driveError) {
-      Logger.log('Drive error: ' + driveError.message);
+      Logger.log('❌ Drive error: ' + driveError.message);
       throw new Error('Failed to create Drive file: ' + driveError.message);
     }
     
-    // STEP 3: Remove placeholder
-    placeholder.remove();
-    Logger.log('Placeholder removed');
-    
-    // STEP 4: Insert image from Drive file
+    // STEP 3: Insert image from Drive file
+    Logger.log('');
     Logger.log('Inserting image from Drive...');
     
     try {
@@ -253,31 +334,37 @@ function populateSlideViaGoogleDrive(slide, title, imageUrl) {
       insertedImage.setWidth(width);
       insertedImage.setHeight(height);
       
-      Logger.log('Image inserted and positioned');
+      Logger.log('✅ Image inserted and positioned');
     } catch (insertError) {
-      Logger.log('Insert error: ' + insertError.message);
+      Logger.log('❌ Insert error: ' + insertError.message);
       // Clean up before throwing
-      tempFile.setTrashed(true);
+      try {
+        tempFile.setTrashed(true);
+      } catch (e) {}
       throw new Error('Failed to insert image: ' + insertError.message);
     }
     
-    // STEP 5: Wait a moment for image to be processed, then delete temp file
+    // STEP 4: Wait a moment for image to be processed, then delete temp file
+    Logger.log('');
     Logger.log('Cleaning up...');
-    Utilities.sleep(2000);  // Wait 2 seconds
+    Utilities.sleep(2000);
     
     try {
       tempFile.setTrashed(true);
       Logger.log('Temp file deleted');
     } catch (deleteError) {
-      Logger.log('Warning: Could not delete temp file: ' + deleteError.message);
-      // Don't throw - image is already inserted
+      Logger.log('⚠️ Warning: Could not delete temp file: ' + deleteError.message);
     }
     
-    Logger.log('✅ Successfully populated slide for: ' + title);
+    Logger.log('');
+    Logger.log('✅✅ Successfully populated slide for: ' + title);
+    Logger.log('========================================');
     
   } catch (e) {
-    Logger.log('Error in populateSlideViaGoogleDrive: ' + e.message);
+    Logger.log('');
+    Logger.log('❌❌ Error in populateSlideViaGoogleDrive: ' + e.message);
     Logger.log('Stack: ' + e.stack);
+    Logger.log('========================================');
     throw new Error('Failed to populate slide: ' + e.message);
   }
 }

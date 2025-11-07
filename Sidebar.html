@@ -1,0 +1,144 @@
+<!-- Sidebar.html -->
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <link rel="stylesheet" href="https://ssl.gstatic.com/docs/script/css/add-ons1.css">
+    <style>
+      .sidebar {
+        padding: 10px;
+      }
+      .block {
+        margin-bottom: 15px;
+      }
+      label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+        font-size: 12px;
+      }
+      input, select {
+        width: 100%;
+        padding: 5px;
+        box-sizing: border-box;
+      }
+      .action {
+        background-color: #4285f4;
+        color: white;
+        border: none;
+        padding: 10px 20px;
+        cursor: pointer;
+        width: 100%;
+        font-size: 14px;
+        font-weight: bold;
+      }
+      .action:hover {
+        background-color: #357ae8;
+      }
+      #status {
+        margin-top: 15px;
+        padding: 10px;
+        border-radius: 4px;
+        font-size: 12px;
+      }
+      .status-success {
+        background-color: #d4edda;
+        color: #155724;
+      }
+      .status-error {
+        background-color: #f8d7da;
+        color: #721c24;
+      }
+      .status-loading {
+        background-color: #fff3cd;
+        color: #856404;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sidebar">
+      <form id="reportForm">
+        <div class="block">
+          <label for="tenantId">Tenant ID</label>
+          <input type="text" id="tenantId" name="tenantId" placeholder="e.g., 5463" required>
+        </div>
+        
+        <div class="block">
+          <label for="data_source">Data Source</label>
+          <select id="data_source" name="data_source">
+            <option value="Pilot Telemetry(A1-Prod)" selected>Pilot Telemetry(A1-Prod)</option>
+            <option value="Pilot Telemetry(A1-Sbx)">Pilot Telemetry(A1-Sbx)</option>
+            <option value="Pilot Telemetry(EU-Prod)">Pilot Telemetry(EU-Prod)</option>
+            <option value="Pilot Telemetry(US-Prod)">Pilot Telemetry(US-Prod)</option>
+          </select>
+        </div>
+        
+        <div class="block">
+          <label for="environment">Data Center</label>
+          <select id="environment" name="environment">
+            <option value="US Production" selected>US Production</option>
+            <option value="NA Production">NA Production</option>
+            <option value="US Sandbox">US Sandbox</option>
+            <option value="NA Sandbox">NA Sandbox</option>
+            <option value="NA Central Sandbox">NA Central Sandbox</option>
+          </select>
+        </div>
+        
+        <div class="block">
+          <label for="interval">Interval</label>
+          <select id="interval" name="interval">
+            <option value="1 day" selected>1 day</option>
+            <option value="1 minute">1 minute</option>
+            <option value="1 hour">1 hour</option>
+          </select>
+        </div>
+        
+        <div class="block">
+          <label for="timeframe">Time Frame</label>
+          <select id="timeframe" name="timeframe">
+            <option value="Last 1 Hour">Last 1 Hour</option>
+            <option value="Last 24 Hours">Last 24 Hours</option>
+            <option value="Last 7 Days" selected>Last 7 Days</option>
+          </select>
+        </div>
+        
+        <div class="block">
+          <button type="submit" class="action">Generate Report</button>
+        </div>
+      </form>
+      
+      <div id="status"></div>
+    </div>
+
+    <script>
+      document.getElementById('reportForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const statusDiv = document.getElementById('status');
+        statusDiv.className = 'status-loading';
+        statusDiv.innerText = 'Generating report... This may take a moment.';
+        
+        // Get form values
+        const formData = {
+          tenantId: document.getElementById('tenantId').value,
+          data_source: document.getElementById('data_source').value,
+          environment: document.getElementById('environment').value,
+          interval: document.getElementById('interval').value,
+          timeframe: document.getElementById('timeframe').value
+        };
+
+        // Call the server-side function
+        google.script.run
+          .withSuccessHandler(function(result) {
+            statusDiv.className = 'status-success';
+            statusDiv.innerText = 'Success! Report generated with charts.';
+          })
+          .withFailureHandler(function(error) {
+            statusDiv.className = 'status-error';
+            statusDiv.innerText = 'Error: ' + error.message;
+            console.error('Error details:', error);
+          })
+          .generateReportFromSidebar(formData);
+      });
+    </script>
+  </body>
+</html>

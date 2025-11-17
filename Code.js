@@ -663,14 +663,17 @@ function populateSlideViaGoogleDrive(slide, title, imageUrl, dashboardLink) {
     Logger.log('  ✓ Chart inserted');
     
     // Add clickable dashboard link below the chart
+    
+    // Add clickable dashboard link below the chart
     if (dashboardLink) {
       try {
         Logger.log('  → Adding dashboard link...');
         
+        // Position right below the chart
         const linkLeft = left;
-        const linkTop = top + height + 10; // 10 points below the chart
+        const linkTop = top + height + 15; // 15 points below the chart
         const linkWidth = width;
-        const linkHeight = 20;
+        const linkHeight = 25;
         
         const textBox = slide.insertTextBox('🔗 View in Grafana Dashboard', linkLeft, linkTop, linkWidth, linkHeight);
         const textRange = textBox.getText();

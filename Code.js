@@ -10,13 +10,37 @@ const CHARTS_TO_PULL = [
   { 
     dashboardUid: 'LUq13bv4z', 
     panelId: 27, 
-    chartTitle: 'API Overall Volume',
+    chartTitle: 'Overall API Volume Trend',
+    dashboardPath: 'api-health-overall-view'
+  },
+   { 
+    dashboardUid: 'LUq13bv4z', 
+    panelId: 33, 
+    chartTitle: 'Overall API Errors Trending',
+    dashboardPath: 'api-health-overall-view'
+  },
+  { 
+    dashboardUid: 'LUq13bv4z', 
+    panelId: 35, 
+    chartTitle: 'API Errors Ranking by Zuora Response Code',
     dashboardPath: 'api-health-overall-view'
   },
   { 
     dashboardUid: 'LUq13bv4z', 
     panelId: 60, 
     chartTitle: 'API Concurrency Usage',
+    dashboardPath: 'api-health-overall-view'
+  },
+    { 
+    dashboardUid: 'LUq13bv4z', 
+    panelId: 23, 
+    chartTitle: 'Overall API Performance Trending',
+    dashboardPath: 'api-health-overall-view'
+  },
+    { 
+    dashboardUid: 'LUq13bv4z', 
+    panelId: 67, 
+    chartTitle: 'API Calls Count by Latency Range',
     dashboardPath: 'api-health-overall-view'
   }
   // Add more charts as needed
@@ -121,7 +145,8 @@ function buildGrafanaRenderUrl(chartConfig, inputs) {
   const timeFrameMap = {
     'Last 1 Hour': 'now-1h',
     'Last 24 Hours': 'now-24h',
-    'Last 7 Days': 'now-7d'
+    'Last 7 Days': 'now-7d',
+    'Last 30 Days': 'now-30d'
   };
   
   const baseUrl = `${GRAFANA_URL}/render/d-solo/${chartConfig.dashboardUid}/${chartConfig.dashboardPath}`;

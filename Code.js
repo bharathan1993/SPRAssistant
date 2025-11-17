@@ -35,7 +35,8 @@ function onOpen(e) {
       .createAddonMenu()
       .addItem('Generate Report', 'showSidebar')
       .addSeparator()
-      .addItem('List Available Panels', 'listAllPanels')
+      .addItem('List All Panels (All Dashboards)', 'listAllPanels')
+      .addItem('List Panels (Current Dashboard)', 'listPanelsCurrentDashboard')
       .addItem('Debug: Show Slide Titles', 'debugShowSlideTitles')
       .addSeparator()
       .addItem('Refresh Panel Cache', 'refreshPanelCache')
@@ -229,13 +230,12 @@ function clearAllCaches() {
 // ========================================
 
 /**
- * Generate report using cached panels
+ * Generate report with automatic multi-dashboard detection
  */
 function generateReportFromSidebar(inputs) {
   try {
     Logger.log('');
     Logger.log('========== STARTING REPORT GENERATION ==========');
-    Logger.log('Dashboard: ' + CURRENT_DASHBOARD + ' (' + DASHBOARDS[CURRENT_DASHBOARD].name + ')');
     Logger.log('Inputs:');
     Logger.log('  Tenant ID: ' + inputs.tenantId);
     Logger.log('  Data Source: ' + inputs.data_source);
@@ -256,21 +256,46 @@ function generateReportFromSidebar(inputs) {
       throw new Error('No slides found in presentation');
     }
     
-    const panelMap = getPanelsWithCache(CURRENT_DASHBOARD);
-    
+    // BUILD UNIFIED PANEL MAP FROM ALL DASHBOARDS
     Logger.log('');
-    Logger.log('Available panels (' + Object.keys(panelMap).length + ' total):');
-    const uniquePanels = {};
-    Object.values(panelMap).forEach(panel => {
-      if (!uniquePanels[panel.id]) {
-        uniquePanels[panel.id] = panel;
-        Logger.log('  ID ' + panel.id + ': "' + panel.title + '"');
+    Logger.log('Loading panels from all dashboards...');
+    
+    const unifiedPanelMap = {};
+    const dashboardKeys = Object.keys(DASHBOARDS);
+    
+    dashboardKeys.forEach(dashboardKey => {
+      Logger.log('  Loading: ' + DASHBOARDS[dashboardKey].name);
+      
+      try {
+        const panelMap = getPanelsWithCache(dashboardKey);
+        
+        // Merge into unified map
+        Object.keys(panelMap).forEach(title => {
+          const panel = panelMap[title];
+          
+          // Store with dashboard reference
+          if (!unifiedPanelMap[title]) {
+            unifiedPanelMap[title] = panel;
+          } else {
+            // Conflict: same panel title in multiple dashboards
+            Logger.log('    ⚠ Conflict: "' + title + '" exists in multiple dashboards');
+            Logger.log('      Using first occurrence from ' + unifiedPanelMap[title].dashboardUid);
+          }
+        });
+        
+      } catch (e) {
+        Logger.log('    ✗ Error loading dashboard: ' + e.message);
       }
     });
     
+    Logger.log('');
+    Logger.log('✓ Loaded ' + Object.keys(unifiedPanelMap).length + ' unique panels from ' + dashboardKeys.length + ' dashboards');
+    
+    // Process slides
     let processedCount = 0;
     let skippedCount = 0;
     const errors = [];
+    const dashboardUsage = {};
     
     for (let i = 0; i < slides.length; i++) {
       const slide = slides[i];
@@ -289,10 +314,16 @@ function generateReportFromSidebar(inputs) {
       
       Logger.log('Slide title: "' + slideTitle + '"');
       
-      const panel = panelMap[slideTitle] || panelMap[slideTitle.trim()];
+      // Try to find matching panel from ANY dashboard
+      const panel = unifiedPanelMap[slideTitle] || unifiedPanelMap[slideTitle.trim()];
       
       if (panel) {
         Logger.log('✓ Found Panel ID: ' + panel.id);
+        Logger.log('  Dashboard: ' + panel.dashboardUid + ' (' + DASHBOARDS[getDashboardKeyByUid(panel.dashboardUid)].name + ')');
+        
+        // Track dashboard usage
+        const dashKey = getDashboardKeyByUid(panel.dashboardUid);
+        dashboardUsage[dashKey] = (dashboardUsage[dashKey] || 0) + 1;
         
         try {
           const chartConfig = {
@@ -303,7 +334,9 @@ function generateReportFromSidebar(inputs) {
           };
           
           const imageUrl = buildGrafanaRenderUrl(chartConfig, inputs);
-          populateSlideViaGoogleDrive(slide, slideTitle, imageUrl);
+          const dashboardLink = buildGrafanaDashboardLink(chartConfig, inputs);
+          
+          populateSlideViaGoogleDrive(slide, slideTitle, imageUrl, dashboardLink);
           
           processedCount++;
           Logger.log('✓✓✓ SLIDE COMPLETED ✓✓✓');
@@ -315,7 +348,7 @@ function generateReportFromSidebar(inputs) {
         }
         
       } else {
-        Logger.log('⊗ No matching panel found');
+        Logger.log('⊗ No matching panel found in any dashboard');
         skippedCount++;
       }
     }
@@ -324,19 +357,31 @@ function generateReportFromSidebar(inputs) {
     Logger.log('========== COMPLETE ==========');
     Logger.log('✓ Processed: ' + processedCount);
     Logger.log('⊗ Skipped: ' + skippedCount);
+    Logger.log('');
+    Logger.log('Dashboards used:');
+    Object.keys(dashboardUsage).forEach(key => {
+      Logger.log('  ' + DASHBOARDS[key].name + ': ' + dashboardUsage[key] + ' chart(s)');
+    });
     Logger.log('==============================');
     
     let message = '';
     if (processedCount > 0) {
       message = 'Report generated successfully!\n\n' +
                 '✓ Updated ' + processedCount + ' chart(s)\n';
+      
+      // Show which dashboards were used
+      const dashUsageText = Object.keys(dashboardUsage)
+        .map(key => DASHBOARDS[key].name + ' (' + dashboardUsage[key] + ')')
+        .join('\n  ');
+      message += '\nDashboards used:\n  ' + dashUsageText;
+      
       if (skippedCount > 0) {
-        message += '⊗ Skipped ' + skippedCount + ' slide(s)';
+        message += '\n\n⊗ Skipped ' + skippedCount + ' slide(s)';
       }
     } else {
       message = 'No charts generated!\n\n' +
                 '⊗ Skipped ' + skippedCount + ' slide(s)\n\n' +
-                'Make sure slide titles match panel names exactly.';
+                'Make sure slide titles match panel names from your dashboards.';
     }
     
     if (errors.length > 0) {
@@ -353,6 +398,18 @@ function generateReportFromSidebar(inputs) {
     Logger.log('Stack: ' + e.stack);
     throw new Error('Failed to generate report: ' + e.message);
   }
+}
+
+/**
+ * Helper function to get dashboard key by UID
+ */
+function getDashboardKeyByUid(uid) {
+  for (const key in DASHBOARDS) {
+    if (DASHBOARDS[key].uid === uid) {
+      return key;
+    }
+  }
+  return null;
 }
 
 // ========================================
@@ -425,9 +482,73 @@ function buildGrafanaRenderUrl(chartConfig, inputs) {
 }
 
 /**
- * Populate slide with chart image via Google Drive
+ * Build Grafana dashboard link (interactive dashboard, not render)
  */
-function populateSlideViaGoogleDrive(slide, title, imageUrl) {
+function buildGrafanaDashboardLink(chartConfig, inputs) {
+  const dataSourceMap = {
+    'Pilot Telemetry(A1-Prod)': 'Pinot Telemetry (US-Prod)',
+    'Pilot Telemetry(A1-Sbx)': 'Pinot Telemetry (US-Sbx)',
+    'Pilot Telemetry(EU-Prod)': 'Pinot Telemetry (EU-Prod)',
+    'Pilot Telemetry(US-Prod)': 'Pinot Telemetry (US-Prod)'
+  };
+  
+  const environmentMap = {
+    'US Production': 'prod02',
+    'NA Production': 'prod01',
+    'US Sandbox': 'sbx02',
+    'NA Sandbox': 'sbx01',
+    'NA Central Sandbox': 'sbxcentral'
+  };
+  
+  const intervalMap = {
+    '1 day': 'day',
+    '1 minute': 'minute',
+    '1 hour': 'hour'
+  };
+  
+  const timeFrameMap = {
+    'Last 1 Hour': 'now-1h',
+    'Last 24 Hours': 'now-24h',
+    'Last 7 Days': 'now-7d',
+    'Last 30 Days': 'now-30d'
+  };
+  
+  // Use /d/ for interactive dashboard (not /render/d-solo/)
+  const baseUrl = `${GRAFANA_URL}/d/${chartConfig.dashboardUid}/${chartConfig.dashboardPath}`;
+  
+  const params = {
+    'orgId': '1',
+    'viewPanel': chartConfig.panelId,  // viewPanel instead of panelId for interactive view
+    'from': timeFrameMap[inputs.timeframe] || 'now-24h',
+    'to': 'now',
+    'var-data_source': dataSourceMap[inputs.data_source] || 'Pinot Telemetry (US-Prod)',
+    'var-environment': environmentMap[inputs.environment] || 'prod02',
+    'var-tenant_id': inputs.tenantId || '',
+    'var-entity_id': '11e64eef-ad7b-6780-9658-00259058c29c',
+    'var-API': 'All',
+    'var-ZuoraResponseCode': 'All',
+    'var-HttpStatus': 'All',
+    'var-Client_twosinglequote': 'All',
+    'var-Client_query_string': '',
+    'var-GFW_Bucket': 'All',
+    'var-interval': intervalMap[inputs.interval] || 'day',
+    'var-gfw_time_range_from': '1.761966092427e+12',
+    'var-restapi_entity_id_mapping_table': 'restapi_entity_id_mapping'
+  };
+  
+  const urlParams = Object.keys(params)
+    .filter(key => params[key] !== '')
+    .map(key => `${key}=${encodeURIComponent(params[key])}`)
+    .join('&');
+  
+  return `${baseUrl}?${urlParams}`;
+}
+
+/**
+ * Populate slide with chart image via Google Drive
+ * NOW WITH: Clickable Grafana dashboard link
+ */
+function populateSlideViaGoogleDrive(slide, title, imageUrl, dashboardLink) {
   try {
     Logger.log('  → Processing chart: ' + title);
     
@@ -541,6 +662,39 @@ function populateSlideViaGoogleDrive(slide, title, imageUrl) {
     
     Logger.log('  ✓ Chart inserted');
     
+    // Add clickable dashboard link below the chart
+    if (dashboardLink) {
+      try {
+        Logger.log('  → Adding dashboard link...');
+        
+        const linkLeft = left;
+        const linkTop = top + height + 10; // 10 points below the chart
+        const linkWidth = width;
+        const linkHeight = 20;
+        
+        const textBox = slide.insertTextBox('🔗 View in Grafana Dashboard', linkLeft, linkTop, linkWidth, linkHeight);
+        const textRange = textBox.getText();
+        
+        // Style the text
+        const textStyle = textRange.getTextStyle();
+        textStyle.setFontSize(10);
+        textStyle.setForegroundColor('#1a73e8'); // Google blue
+        textStyle.setBold(true);
+        
+        // Make it a clickable link
+        textStyle.setLinkUrl(dashboardLink);
+        
+        // Align text
+        const paragraphStyle = textRange.getParagraphStyle();
+        paragraphStyle.setParagraphAlignment(SlidesApp.ParagraphAlignment.START);
+        
+        Logger.log('  ✓ Dashboard link added');
+      } catch (linkError) {
+        Logger.log('  ⚠ Could not add dashboard link: ' + linkError.message);
+        // Don't throw - link is optional
+      }
+    }
+    
     Utilities.sleep(2000);
     tempFile.setTrashed(true);
     Logger.log('  ✓ Cleanup complete');
@@ -556,12 +710,115 @@ function populateSlideViaGoogleDrive(slide, title, imageUrl) {
 // ========================================
 
 /**
- * List all available panels
+ * List all available panels from ALL dashboards
  */
 function listAllPanels() {
   try {
+    Logger.log('========== LISTING ALL PANELS FROM ALL DASHBOARDS ==========');
+    
+    const allPanels = [];
+    const dashboardKeys = Object.keys(DASHBOARDS);
+    
+    // Fetch panels from each dashboard
+    dashboardKeys.forEach(dashboardKey => {
+      const dashboard = DASHBOARDS[dashboardKey];
+      Logger.log('');
+      Logger.log('Loading: ' + dashboard.name);
+      
+      try {
+        const panelMap = getPanelsWithCache(dashboardKey);
+        
+        // Get unique panels (avoid duplicates from trimmed versions)
+        const uniquePanels = {};
+        Object.values(panelMap).forEach(panel => {
+          uniquePanels[panel.id + '_' + panel.dashboardUid] = {
+            ...panel,
+            dashboardName: dashboard.name,
+            dashboardKey: dashboardKey
+          };
+        });
+        
+        const dashboardPanels = Object.values(uniquePanels);
+        Logger.log('  Found ' + dashboardPanels.length + ' panels');
+        
+        allPanels.push(...dashboardPanels);
+        
+      } catch (e) {
+        Logger.log('  ✗ Error loading dashboard: ' + e.message);
+      }
+    });
+    
+    Logger.log('');
+    Logger.log('========== TOTAL PANELS ACROSS ALL DASHBOARDS ==========');
+    
+    // Group by dashboard for display
+    const byDashboard = {};
+    allPanels.forEach(panel => {
+      if (!byDashboard[panel.dashboardKey]) {
+        byDashboard[panel.dashboardKey] = [];
+      }
+      byDashboard[panel.dashboardKey].push(panel);
+    });
+    
+    // Log grouped by dashboard
+    Object.keys(byDashboard).forEach(dashKey => {
+      const dashboard = DASHBOARDS[dashKey];
+      const panels = byDashboard[dashKey];
+      
+      Logger.log('');
+      Logger.log('--- ' + dashboard.name + ' (' + panels.length + ' panels) ---');
+      panels.sort((a, b) => a.id - b.id).forEach(panel => {
+        Logger.log('  ID ' + panel.id + ': "' + panel.title + '"');
+      });
+    });
+    
+    Logger.log('');
+    Logger.log('========================================================');
+    Logger.log('Total: ' + allPanels.length + ' panels from ' + dashboardKeys.length + ' dashboard(s)');
+    
+    // Show in UI - grouped by dashboard
+    const ui = SlidesApp.getUi();
+    let displayText = '';
+    
+    Object.keys(byDashboard).forEach(dashKey => {
+      const dashboard = DASHBOARDS[dashKey];
+      const panels = byDashboard[dashKey];
+      
+      displayText += '━━━ ' + dashboard.name + ' ━━━\n';
+      displayText += panels
+        .sort((a, b) => a.id - b.id)
+        .map(p => 'ID ' + p.id + ': ' + p.title)
+        .join('\n');
+      displayText += '\n\n';
+    });
+    
+    ui.alert(
+      'Available Panels (' + allPanels.length + ' total from ' + dashboardKeys.length + ' dashboards)',
+      displayText,
+      ui.ButtonSet.OK
+    );
+    
+    return allPanels;
+    
+  } catch (e) {
+    Logger.log('Error: ' + e.message);
+    SlidesApp.getUi().alert('Error', e.message, SlidesApp.getUi().ButtonSet.OK);
+    throw e;
+  }
+}
+
+/**
+ * List panels from current dashboard only
+ */
+function listPanelsCurrentDashboard() {
+  try {
+    const dashboard = DASHBOARDS[CURRENT_DASHBOARD];
+    
+    Logger.log('Listing panels for: ' + dashboard.name);
+    
     const panelMap = getPanelsWithCache(CURRENT_DASHBOARD);
     
+    // Get unique panels
     const uniquePanels = {};
     Object.values(panelMap).forEach(panel => {
       uniquePanels[panel.id] = panel;
@@ -569,12 +826,14 @@ function listAllPanels() {
     
     const panels = Object.values(uniquePanels);
     
-    Logger.log('========== AVAILABLE PANELS ==========');
+    Logger.log('========== PANELS: ' + dashboard.name + ' ==========');
     panels.forEach(panel => {
       Logger.log('ID: ' + panel.id + ' | Title: "' + panel.title + '"');
     });
     Logger.log('======================================');
+    Logger.log('Total: ' + panels.length + ' panels');
     
+    // Show in UI
     const ui = SlidesApp.getUi();
     const panelList = panels
       .sort((a, b) => a.id - b.id)
@@ -582,8 +841,8 @@ function listAllPanels() {
       .join('\n');
     
     ui.alert(
-      'Available Panels (' + panels.length + ' total)',
-      'Dashboard: ' + DASHBOARDS[CURRENT_DASHBOARD].name + '\n\n' + panelList,
+      dashboard.name + ' (' + panels.length + ' panels)',
+      panelList,
       ui.ButtonSet.OK
     );
     
